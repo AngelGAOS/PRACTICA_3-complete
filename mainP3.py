@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json
 import time
+import xml.etree.ElementTree as ET
 
 # ==========================================
 # CEREBRO MATEMÁTICO: MOTOR AFN / AFN-λ / MINIMIZACIÓN
@@ -241,7 +242,15 @@ def main():
         time.sleep(0.05)
 
     def cargar_archivo():
-        ruta = filedialog.askopenfilename(title="Descubre tu Autómata", filetypes=[("Archivos JSON", "*.json")])
+        ruta = filedialog.askopenfilename(
+            title="Descubre tu Autómata", 
+            filetypes=[
+                ("Todos los soportados", "*.jff *.json *.xml"),
+                ("Archivos JFLAP", "*.jff"),
+                ("Archivos JSON", "*.json"),
+                ("Archivos XML", "*.xml")
+            ]
+        )
         if not ruta: return
             
         try:
@@ -249,13 +258,53 @@ def main():
             consola.delete(1.0, tk.END)
             consola.config(state=tk.DISABLED)
             
-            escribir_consola("Iniciando análisis del archivo...")
-            with open(ruta, 'r', encoding='utf-8') as f:
-                datos = json.load(f)
+            escribir_consola(f"Iniciando análisis del archivo: {ruta.split('/')[-1]}...")
             
+            datos = {}
+            if ruta.endswith('.json'):
+                with open(ruta, 'r', encoding='utf-8') as f:
+                    datos = json.load(f)
+                escribir_consola("JSON descifrado con éxito.")
+                
+            elif ruta.endswith('.jff') or ruta.endswith('.xml'):
+                escribir_consola("Detectado formato XML/JFLAP. Parseando nodos...")
+                tree = ET.parse(ruta)
+                root_xml = tree.getroot()
+                automaton = root_xml.find('automaton')
+                
+                datos = {
+                    'estados': [],
+                    'transiciones': [],
+                    'inicial': '',
+                    'finales': [],
+                    'alfabeto': set()
+                }
+                
+                for state in automaton.findall('state'):
+                    id_estado = state.get('id')
+                    nombre = state.get('name')
+                    datos['estados'].append({'id': id_estado, 'nombre': nombre})
+                    
+                    if state.find('initial') is not None:
+                        datos['inicial'] = id_estado
+                    if state.find('final') is not None:
+                        datos['finales'].append(id_estado)
+                        
+                for trans in automaton.findall('transition'):
+                    origen = trans.find('from').text
+                    destino = trans.find('to').text
+                    read_tag = trans.find('read')
+                    lee = read_tag.text if read_tag is not None and read_tag.text else 'λ'
+                    
+                    datos['transiciones'].append({'de': origen, 'lee': lee, 'a': destino})
+                    if lee != 'λ':
+                        datos['alfabeto'].add(lee)
+                        
+                datos['alfabeto'] = list(datos['alfabeto'])
+                escribir_consola("Archivo JFLAP traducido a modelo lógico.")
+
             app_state["datos_json"] = datos
             app_state["motor"] = MotorAutomata(datos)
-            escribir_consola("JSON descifrado e inyectado al motor.")
             
             alfabeto = datos.get('alfabeto', [])
             escribir_consola(f"Extrayendo alfabeto Σ = {{ {', '.join(alfabeto)} }}")
@@ -274,16 +323,16 @@ def main():
                 tag = 'par' if i % 2 == 0 else 'impar'
                 tabla_transiciones.insert("", tk.END, values=(f"δ({t['de']}, {t['lee']})", "→", t["a"]), tags=(tag,))
             
-            # Limpiar tablas de minimización si cargamos otro archivo
             for item in tabla_orig.get_children(): tabla_orig.delete(item)
             for item in tabla_mini.get_children(): tabla_mini.delete(item)
             lbl_stats_min.config(text="Esperando ejecución...")
 
             escribir_consola("¡Autómata ensamblado y listo para simular!")
             messagebox.showinfo("Éxito", "El autómata ha sido cargado.")
+            
         except Exception as e:
             escribir_consola(f"[ERROR CRÍTICO] {str(e)}")
-            messagebox.showerror("Error", "Archivo inválido.")
+            messagebox.showerror("Error", "Archivo inválido o formato incorrecto.")
 
     # ENCABEZADO Y NOTEBOOK PRINCIPAL
     header_frame = ttk.Frame(root, padding=15)
@@ -295,11 +344,11 @@ def main():
 
     # --- PESTAÑA 1: DEFINICIÓN ---
     tab1 = tk.Frame(notebook, bg="#f0f2f5")
-    notebook.add(tab1, text=" ⚙️ Definición y Carga ")
+    notebook.add(tab1, text="Definición y Carga ")
 
     panel_izq = ttk.Frame(tab1)
     panel_izq.pack(side=tk.LEFT, fill='y', padx=15, pady=15)
-    ttk.Button(panel_izq, text="🔍 Explorar Archivo .JSON", command=cargar_archivo).pack(fill='x', pady=(0, 15), ipady=5)
+    ttk.Button(panel_izq, text="🔍 Explorar Archivo", command=cargar_archivo).pack(fill='x', pady=(0, 15), ipady=5)
 
     frame_info = ttk.LabelFrame(panel_izq, text=" 5 Tuplas del Autómata ")
     frame_info.pack(fill='both', expand=True)
@@ -341,7 +390,7 @@ def main():
 
     # --- PESTAÑA 2: SIMULACIÓN ---
     tab2 = tk.Frame(notebook, bg="#f0f2f5")
-    notebook.add(tab2, text=" 🎯 Simulación Paso a Paso ")
+    notebook.add(tab2, text="Simulación Paso a Paso ")
 
     frame_entrada = ttk.Frame(tab2, padding=20)
     frame_entrada.pack(fill='x')
@@ -363,8 +412,8 @@ def main():
             tag = 'par' if paso['paso'] % 2 == 0 else 'impar'
             tabla_simulacion.insert("", tk.END, values=(paso['paso'], paso['simbolo'], estados_formateados), tags=(tag,))
             
-        if es_aceptada: lbl_resultado.config(text="✅ CADENA ACEPTADA", foreground="#38a169")
-        else: lbl_resultado.config(text="❌ CADENA RECHAZADA", foreground="#e53e3e")
+        if es_aceptada: lbl_resultado.config(text="CADENA ACEPTADA", foreground="#38a169")
+        else: lbl_resultado.config(text="CADENA RECHAZADA", foreground="#e53e3e")
 
     ttk.Button(frame_entrada, text="⚡ Ejecutar", command=ejecutar_simulacion).pack(side=tk.LEFT, padx=10, ipady=4)
     lbl_resultado = ttk.Label(tab2, text="ESPERANDO CADENA...", font=("Segoe UI", 20, "bold"), foreground="#718096")
@@ -388,7 +437,7 @@ def main():
 
     # --- PESTAÑA 3: MINIMIZACIÓN LADO A LADO ---
     tab3 = tk.Frame(notebook, bg="#f0f2f5")
-    notebook.add(tab3, text=" ✂️ Minimización y Reducción ")
+    notebook.add(tab3, text="Minimización y Reducción ")
 
     frame_controles_min = ttk.Frame(tab3, padding=15)
     frame_controles_min.pack(fill='x')
@@ -480,7 +529,7 @@ def main():
     # PESTAÑA 4: CONVERSIÓN AFND -> AFD (SUBCONJUNTOS)
     # ==========================================
     tab4 = tk.Frame(notebook, bg="#f0f2f5")
-    notebook.add(tab4, text=" 🔄 Conversión a AFD (Subconjuntos) ")
+    notebook.add(tab4, text="Conversión a AFD (Subconjuntos) ")
 
     frame_controles_conv = ttk.Frame(tab4, padding=15)
     frame_controles_conv.pack(fill='x')
@@ -502,11 +551,11 @@ def main():
 
         # 1. Llenar tabla de Estados (Determinación de aceptación)
         for est in resultado["estados"]:
-            es_inicial = "⭐ SÍ" if est == resultado["inicial"] else "No"
-            es_final = "✅ SÍ" if est in resultado["finales"] else "No"
+            es_inicial = "SÍ" if est == resultado["inicial"] else "No"
+            es_final = "SÍ" if est in resultado["finales"] else "No"
             nombre = formatear_estado(est)
             
-            tag = 'final' if es_final == "✅ SÍ" else 'normal'
+            tag = 'final' if es_final == "SÍ" else 'normal'
             tabla_nuevos_estados.insert("", tk.END, values=(nombre, es_inicial, es_final), tags=(tag,))
 
         # 2. Llenar tabla de Transiciones Resultantes
@@ -569,7 +618,7 @@ def main():
     # PESTAÑA 5: PRUEBAS MÚLTIPLES (POR LOTES)
     # ==========================================
     tab5 = tk.Frame(notebook, bg="#f0f2f5")
-    notebook.add(tab5, text=" 📝 Pruebas Múltiples ")
+    notebook.add(tab5, text=" Pruebas Múltiples ")
 
     frame_controles_lotes = ttk.Frame(tab5, padding=15)
     frame_controles_lotes.pack(fill='x')
@@ -606,11 +655,11 @@ def main():
                 
                 if es_aceptada:
                     aceptadas += 1
-                    resultado_txt = "✅ Aceptada"
+                    resultado_txt = "Aceptada"
                     tag = 'aceptada'
                 else:
                     rechazadas += 1
-                    resultado_txt = "❌ Rechazada"
+                    resultado_txt = "Rechazada"
                     tag = 'rechazada'
                 
                 texto_mostrar = cadena if cadena_a_probar else "λ (Cadena Vacía)"
@@ -623,7 +672,7 @@ def main():
         except Exception as e:
             messagebox.showerror("Error de Lectura", f"No se pudo procesar el archivo:\n{e}")
 
-    ttk.Button(frame_controles_lotes, text="📂 Cargar Archivo .TXT y Evaluar", command=cargar_y_probar_lote).pack(side=tk.LEFT, padx=10, ipady=4)
+    ttk.Button(frame_controles_lotes, text="Cargar Archivo .TXT y Evaluar", command=cargar_y_probar_lote).pack(side=tk.LEFT, padx=10, ipady=4)
     lbl_stats_lotes = ttk.Label(frame_controles_lotes, text="Esperando archivo...", font=("Segoe UI", 11, "bold"), foreground="#2b6cb0")
     lbl_stats_lotes.pack(side=tk.LEFT, padx=20)
 
